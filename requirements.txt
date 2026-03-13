@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+flask
+requests
+python-dotenv
+pytz
+sqlite3
