@@ -1,0 +1,1391 @@
+// ============================================
+// FLOREXIA BOT - Complete Edition
+// Owner: SKY FLOREX 🪐
+// ============================================
+
+// ========== CONFIGURATION ==========
+const BOT_TOKEN = env.BOT_TOKEN;
+const OWNER_ID = env.OWNER_ID;
+const CHANNEL_LINK = env.CHANNEL_LINK;
+const RECHARGE_CONTACT = env.RECHARGE_CONTACT || "@LazyMikey";
+const OWNER_NAME = env.OWNER_NAME || "SKY FLOREX 🪐";
+const SUPPORT_CONTACT = env.SUPPORT_CONTACT || "@LazyMikey";
+const STORE_NAME = env.STORE_NAME || "FLOREXIA 🍡";
+const REFERRAL_BONUS = 1;
+const NUMBERS_MARKUP = 30;
+
+// ========== RATE LIMITING ==========
+const RATE_LIMIT = 30;
+const rateLimit = {};
+
+function checkRateLimit(userId) {
+    const now = Date.now() / 1000;
+    if (!rateLimit[userId]) rateLimit[userId] = [];
+    rateLimit[userId] = rateLimit[userId].filter(t => now - t < 60);
+    if (rateLimit[userId].length >= RATE_LIMIT) return false;
+    rateLimit[userId].push(now);
+    return true;
+}
+
+// ========== DATABASE INIT ==========
+const db = new Database('florexia');
+
+// Users table
+db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        balance INTEGER DEFAULT 2,
+        is_blocked INTEGER DEFAULT 0,
+        is_admin INTEGER DEFAULT 0,
+        referred_by INTEGER,
+        referral_code TEXT UNIQUE,
+        joined_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
+// Orders table
+db.run(`
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        service_type TEXT,
+        platform TEXT,
+        country TEXT,
+        link TEXT,
+        quantity INTEGER,
+        final_price INTEGER,
+        api_order_id TEXT,
+        number TEXT,
+        status TEXT DEFAULT 'pending',
+        completed_by INTEGER,
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
+// Payments table
+db.run(`
+    CREATE TABLE IF NOT EXISTS payments (
+        payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        amount INTEGER,
+        requested_amount INTEGER,
+        transaction_id TEXT,
+        screenshot_file_id TEXT,
+        status TEXT DEFAULT 'pending',
+        approved_by INTEGER,
+        approved_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
+// Referrals table
+db.run(`
+    CREATE TABLE IF NOT EXISTS referrals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id INTEGER,
+        referred_id INTEGER UNIQUE,
+        bonus INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
+// Config table
+db.run(`
+    CREATE TABLE IF NOT EXISTS config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+`);
+
+// Default config
+const defaultConfig = [
+    ['search_api_url', 'https://leakosintapi.com/'],
+    ['search_api_token', ''],
+    ['search_lang', 'ru'],
+    ['search_limit', '300'],
+    ['min_order', '20'],
+    ['numbers_markup', '30'],
+    ['followers_cheap', '35'],
+    ['followers_medium', '60'],
+    ['followers_high', '90'],
+    ['followers_premium', '120'],
+    ['views_price', '5'],
+    ['likes_price', '30'],
+    ['qr_code_file_id', '']
+];
+
+defaultConfig.forEach(([key, val]) => {
+    db.run("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", [key, val]);
+});
+
+// ========== NUMBER LISTS (Purani file ke hisaab se) ==========
+const WHATSAPP_NUMBERS = [
+    {"flag": "🇿🇦", "country": "South Africa", "code": "+27", "base": 20},
+    {"flag": "🇮🇩", "country": "Indonesia", "code": "+62", "base": 20},
+    {"flag": "🇻🇳", "country": "Vietnam", "code": "+84", "base": 33},
+    {"flag": "🇨🇦", "country": "Canada", "code": "+1", "base": 60},
+    {"flag": "🇺🇸", "country": "USA", "code": "+1", "base": 99},
+    {"flag": "🇹🇷", "country": "Turkey", "code": "+90", "base": 57},
+    {"flag": "🇵🇭", "country": "Philippines", "code": "+63", "base": 57},
+    {"flag": "🇺🇿", "country": "Uzbekistan", "code": "+998", "base": 60},
+    {"flag": "🇷🇺", "country": "Russia", "code": "+7", "base": 153},
+    {"flag": "🇨🇴", "country": "Colombia", "code": "+57", "base": 62},
+    {"flag": "🇸🇦", "country": "Saudi Arabia", "code": "+966", "base": 200},
+    {"flag": "🇩🇰", "country": "Denmark", "code": "+45", "base": 380},
+    {"flag": "🇲🇾", "country": "Malaysia", "code": "+60", "base": 93},
+    {"flag": "🇵🇰", "country": "Pakistan", "code": "+92", "base": 86}
+];
+
+const TELEGRAM_NUMBERS = [
+    {"flag": "🇷🇺", "country": "Russia", "code": "+7", "base": 272},
+    {"flag": "🇨🇱", "country": "Chile", "code": "+56", "base": 85},
+    {"flag": "🇲🇾", "country": "Malaysia", "code": "+60", "base": 199},
+    {"flag": "🇵🇭", "country": "Philippines", "code": "+63", "base": 60},
+    {"flag": "🇩🇰", "country": "Denmark", "code": "+45", "base": 100}
+];
+
+// ========== PAYMENT TIERS ==========
+const PAYMENT_TIERS = [
+    {"request": 10, "add": 11},
+    {"request": 20, "add": 21},
+    {"request": 50, "add": 53},
+    {"request": 80, "add": 83},
+    {"request": 100, "add": 110}
+];
+
+// ========== HELPER FUNCTIONS ==========
+function getConfig(key) {
+    const res = db.get("SELECT value FROM config WHERE key = ?", [key]);
+    return res ? res.value : null;
+}
+
+function setConfig(key, value) {
+    db.run("REPLACE INTO config (key, value) VALUES (?, ?)", [key, String(value)]);
+}
+
+function getBalance(userId) {
+    const user = db.get("SELECT balance FROM users WHERE user_id = ?", [userId]);
+    return user ? user.balance : 0;
+}
+
+function updateBalance(userId, amount) {
+    db.run("UPDATE users SET balance = balance + ? WHERE user_id = ?", [amount, userId]);
+}
+
+function hasBalance(userId, amount) {
+    if (userId == OWNER_ID) return true;
+    return getBalance(userId) >= amount;
+}
+
+function deductBalance(userId, amount) {
+    if (userId != OWNER_ID) updateBalance(userId, -amount);
+}
+
+function isAdmin(userId) {
+    if (userId == OWNER_ID) return true;
+    const user = db.get("SELECT is_admin FROM users WHERE user_id = ?", [userId]);
+    return user ? user.is_admin == 1 : false;
+}
+
+function isBlocked(userId) {
+    const user = db.get("SELECT is_blocked FROM users WHERE user_id = ?", [userId]);
+    return user ? user.is_blocked == 1 : false;
+}
+
+function setBlock(userId, block) {
+    db.run("UPDATE users SET is_blocked = ? WHERE user_id = ?", [block ? 1 : 0, userId]);
+}
+
+function setAdmin(userId, admin) {
+    db.run("UPDATE users SET is_admin = ? WHERE user_id = ?", [admin ? 1 : 0, userId]);
+}
+
+function getReferralCount(userId) {
+    const res = db.get("SELECT COUNT(*) as count FROM users WHERE referred_by = ?", [userId]);
+    return res.count;
+}
+
+function getReferralEarnings(userId) {
+    const res = db.get("SELECT SUM(bonus) as total FROM referrals WHERE referrer_id = ?", [userId]);
+    return res.total || 0;
+}
+
+function getTotalUsers() {
+    const res = db.get("SELECT COUNT(*) as count FROM users");
+    return res.count;
+}
+
+function getRecentUsers(limit = 50) {
+    return db.all("SELECT user_id, username, balance, is_blocked, is_admin FROM users ORDER BY user_id DESC LIMIT ?", [limit]);
+}
+
+function getRecentOrders(limit = 20) {
+    return db.all("SELECT * FROM orders ORDER BY created_at DESC LIMIT ?", [limit]);
+}
+
+function saveOrder(userId, serviceType, platform, link, quantity, finalPrice, apiOrderId, number = null, country = null) {
+    const result = db.run(
+        "INSERT INTO orders (user_id, service_type, platform, country, link, quantity, final_price, api_order_id, number, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+        [userId, serviceType, platform, country, link, quantity, finalPrice, apiOrderId, number]
+    );
+    const orderId = result.lastInsertRowid;
+    notifyOwner(`🛒 *New Order*\nUser: ${userId}\nService: ${serviceType}\nPrice: ₹${finalPrice}\nOrder ID: ${orderId}`);
+    return orderId;
+}
+
+function getOrder(orderId) {
+    return db.get("SELECT * FROM orders WHERE order_id = ?", [orderId]);
+}
+
+function completeOrder(orderId, completedBy, number = null) {
+    const now = new Date().toISOString();
+    if (number) {
+        db.run("UPDATE orders SET status = 'completed', number = ?, completed_by = ?, completed_at = ? WHERE order_id = ?", [number, completedBy, now, orderId]);
+    } else {
+        db.run("UPDATE orders SET status = 'completed', completed_by = ?, completed_at = ? WHERE order_id = ?", [completedBy, now, orderId]);
+    }
+}
+
+function getNumberFinalPrice(base) {
+    const markup = parseInt(getConfig('numbers_markup') || NUMBERS_MARKUP);
+    return base + markup;
+}
+
+function getInstagramPrice(serviceType, quality, quantity) {
+    let pricePerUnit = 0;
+    if (serviceType == 'followers') {
+        const key = `followers_${quality}`;
+        pricePerUnit = parseInt(getConfig(key) || 35);
+        const units = Math.ceil(quantity / 1000);
+        return units * pricePerUnit;
+    } else if (serviceType == 'views') {
+        pricePerUnit = parseInt(getConfig('views_price') || 5);
+        const units = Math.ceil(quantity / 10000);
+        return units * pricePerUnit;
+    } else if (serviceType == 'likes') {
+        pricePerUnit = parseInt(getConfig('likes_price') || 30);
+        const units = Math.ceil(quantity / 100);
+        return units * pricePerUnit;
+    }
+    return 0;
+}
+
+function searchLeakosint(query) {
+    const apiUrl = getConfig('search_api_url') || 'https://leakosintapi.com/';
+    const apiToken = getConfig('search_api_token');
+    if (!apiToken) return { error: "Search API not configured." };
+    
+    const payload = {
+        token: apiToken,
+        request: query,
+        limit: parseInt(getConfig('search_limit') || 300),
+        lang: getConfig('search_lang') || 'ru'
+    };
+    
+    try {
+        const response = HTTP.post(apiUrl, JSON.stringify(payload), {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30
+        });
+        return JSON.parse(response.body);
+    } catch (e) {
+        return { error: e.message };
+    }
+}
+
+function formatSearchResult(data) {
+    let lines = [];
+    for (const [k, v] of Object.entries(data)) {
+        lines.push(`  ${k}: ${JSON.stringify(v)}`);
+    }
+    return "{\n" + lines.join("\n") + "\n}";
+}
+
+function generateReceipt(order, completedByName) {
+    return `🧾 *${STORE_NAME} - Order Receipt*\n━━━━━━━━━━━━━━━━━━━━\n\n🆔 *Order ID:* \`${order.order_id}\`\n📱 *Service:* ${order.service_type}\n${order.country ? `🌍 *Country:* ${order.country}\n` : ''}${order.link ? `🔗 *Link:* ${order.link}\n` : ''}📊 *Quantity:* ${order.quantity}\n💰 *Amount:* ₹${order.final_price}\n${order.number ? `📞 *Number:* \`${order.number}\`\n` : ''}📅 *Date:* ${order.created_at}\n👤 *Completed by:* ${completedByName}\n\n✅ *Your order has been completed successfully!*\nThank you for using ${STORE_NAME}.\n\n📞 *Support:* ${SUPPORT_CONTACT}\n━━━━━━━━━━━━━━━━━━━━`;
+}
+
+function escapeMarkdown(text) {
+    if (!text) return "";
+    const escapeChars = /[_*[\]()~`>#+\-=|{}.!]/g;
+    return String(text).replace(escapeChars, '\\$&');
+}
+
+function notifyOwner(text) {
+    Bot.sendMessage(OWNER_ID, `🔔 *Notification*\n\n${escapeMarkdown(text)}`, { parse_mode: "Markdown" });
+}
+
+// ========== SESSION MANAGEMENT ==========
+const sessions = {};
+
+// ========== MESSAGE HELPERS ==========
+function safeSendMessage(chatId, text, options = {}) {
+    try {
+        return Bot.sendMessage(chatId, text, options);
+    } catch (e) {
+        try {
+            return Bot.sendMessage(chatId, text, { ...options, parse_mode: null });
+        } catch (e2) {
+            return null;
+        }
+    }
+}
+
+function safeEditMessageText(chatId, messageId, text, options = {}) {
+    try {
+        return Bot.editMessageText(chatId, messageId, text, options);
+    } catch (e) {
+        try {
+            return Bot.editMessageText(chatId, messageId, text, { ...options, parse_mode: null });
+        } catch (e2) {
+            return null;
+        }
+    }
+}
+
+// ========== START COMMAND ==========
+Bot.onText("/start", (msg) => {
+    const userId = msg.from.id;
+    const firstName = msg.from.first_name || "User";
+    const username = msg.from.username || "";
+    
+    if (!checkRateLimit(userId)) {
+        safeSendMessage(userId, "⚠️ Too many requests. Please slow down.");
+        return;
+    }
+    
+    if (isBlocked(userId)) {
+        safeSendMessage(userId, "⛔ You are blocked. Contact admin.");
+        return;
+    }
+    
+    // Check referral
+    let referrer = null;
+    if (msg.text && msg.text.split(" ").length > 1) {
+        const refCode = msg.text.split(" ")[1];
+        const refUser = db.get("SELECT user_id FROM users WHERE referral_code = ?", [refCode]);
+        if (refUser && refUser.user_id != userId) {
+            referrer = refUser.user_id;
+        }
+    }
+    
+    // Register user if new
+    let user = db.get("SELECT * FROM users WHERE user_id = ?", [userId]);
+    if (!user) {
+        const refCode = `FLX${userId}${Math.floor(Math.random() * 900 + 100)}`;
+        db.run(
+            "INSERT INTO users (user_id, username, first_name, balance, referral_code, referred_by) VALUES (?, ?, ?, 2, ?, ?)",
+            [userId, username, firstName, refCode, referrer]
+        );
+        
+        if (referrer) {
+            db.run("UPDATE users SET balance = balance + ? WHERE user_id = ?", [REFERRAL_BONUS, referrer]);
+            db.run("INSERT INTO referrals (referrer_id, referred_id, bonus) VALUES (?, ?, ?)", [referrer, userId, REFERRAL_BONUS]);
+            safeSendMessage(referrer, `🎉 *Referral Bonus!*\nSomeone joined using your link. You got ₹${REFERRAL_BONUS} added to your balance.`, { parse_mode: "Markdown" });
+        }
+        
+        user = db.get("SELECT * FROM users WHERE user_id = ?", [userId]);
+    }
+    
+    showMainMenu(userId, msg.chat.id, null, firstName);
+});
+
+function showMainMenu(userId, chatId, messageId = null, firstName = null) {
+    if (!firstName) {
+        const user = db.get("SELECT first_name FROM users WHERE user_id = ?", [userId]);
+        firstName = user ? user.first_name : "User";
+    }
+    
+    const balance = getBalance(userId);
+    const refCount = getReferralCount(userId);
+    
+    const text = `🌟 *WELCOME TO FLOREXIA BOT* 🌟\n\n━━━━━━━━━━━━━━━━\n👤 *User:* ${escapeMarkdown(firstName)}\n💰 *Balance:* \`₹${balance}\`\n👥 *Referrals:* \`${refCount}\`\n━━━━━━━━━━━━━━━━\n\n⬇️ *Choose an option below:*`;
+    
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🔍 SEARCH DATA", callback_data: "menu_search" }],
+            [{ text: "📱 INSTAGRAM", callback_data: "menu_instagram" }],
+            [{ text: "📞 BUY NUMBER", callback_data: "menu_numbers" }],
+            [{ text: "💰 MY BALANCE", callback_data: "menu_balance" },
+             { text: "💳 ADD BALANCE", callback_data: "menu_payment" }],
+            [{ text: "👥 REFERRAL", callback_data: "menu_referral" },
+             { text: "👤 PROFILE", callback_data: "menu_profile" }],
+            [{ text: "ℹ️ HELP", callback_data: "menu_help" }],
+            [{ text: "📢 JOIN CHANNEL", url: CHANNEL_LINK }]
+        ]
+    };
+    
+    if (isAdmin(userId)) {
+        keyboard.inline_keyboard.push([{ text: "⚙️ ADMIN PANEL", callback_data: "menu_admin" }]);
+    }
+    
+    const options = { parse_mode: "Markdown", reply_markup: keyboard };
+    
+    if (messageId) {
+        safeEditMessageText(chatId, messageId, text, options);
+    } else {
+        safeSendMessage(chatId, text, options);
+    }
+}
+
+// ========== CALLBACK HANDLER ==========
+Bot.on("callback_query", (query) => {
+    const userId = query.from.id;
+    const data = query.data;
+    
+    if (!checkRateLimit(userId)) {
+        Bot.answerCallbackQuery(query.id, "⚠️ Too many requests. Please slow down.", { show_alert: true });
+        return;
+    }
+    
+    if (isBlocked(userId)) {
+        Bot.answerCallbackQuery(query.id, "⛔ You are blocked.", { show_alert: true });
+        return;
+    }
+    
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+    
+    // ===== MAIN MENU ACTIONS =====
+    if (data === "menu_main") {
+        showMainMenu(userId, chatId, messageId);
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "menu_balance") {
+        const balance = getBalance(userId);
+        Bot.answerCallbackQuery(query.id, `💰 Your Balance: ₹${balance}`, { show_alert: true });
+        return;
+    }
+    
+    if (data === "menu_profile") {
+        const user = db.get("SELECT * FROM users WHERE user_id = ?", [userId]);
+        const totalOrders = db.get("SELECT COUNT(*) as count FROM orders WHERE user_id = ?", [userId]).count;
+        const completedOrders = db.get("SELECT COUNT(*) as count FROM orders WHERE user_id = ? AND status = 'completed'", [userId]).count;
+        const role = (userId == OWNER_ID) ? "👑 Owner" : (user.is_admin ? "🛡️ Admin" : "👤 User");
+        
+        const text = `👤 *Your Profile*\n\n🆔 ID: \`${userId}\`\n💰 Balance: ₹${user.balance}\n📦 Total Orders: ${totalOrders}\n✅ Completed: ${completedOrders}\n🔰 Role: ${role}\n\n💳 Recharge: ${RECHARGE_CONTACT}`;
+        
+        const keyboard = { inline_keyboard: [[{ text: "🔙 BACK", callback_data: "menu_main" }]] };
+        safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "menu_referral") {
+        const user = db.get("SELECT referral_code FROM users WHERE user_id = ?", [userId]);
+        const botInfo = Bot.getMe();
+        const botUsername = botInfo.username;
+        const refLink = `https://t.me/${botUsername}?start=${user.referral_code}`;
+        const refCount = getReferralCount(userId);
+        const earnings = getReferralEarnings(userId);
+        
+        const text = `👥 *Referral Program*\n\n🔗 *Your Link:*\n\`${refLink}\`\n\n📊 *Total Referrals:* ${refCount}\n💰 *Total Earnings:* ₹${earnings}\n\n*How it works:*\n• Share your link with friends\n• When they join, you get ₹${REFERRAL_BONUS}\n• No limit – earn unlimited!\n\nShare and earn!`;
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "🔗 SHARE LINK", switch_inline_query: `Join FLOREXIA and earn! ${refLink}` }],
+                [{ text: "🔄 REFRESH", callback_data: "menu_referral" },
+                 { text: "🔙 BACK", callback_data: "menu_main" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "menu_help") {
+        const text = `📘 *How to Use FLOREXIA*\n\n1️⃣ *Search Data*\n   • Send number with country code\n   • Send email address\n   • Cost: 1 balance\n\n2️⃣ *Instagram Services*\n   • Choose category (Followers/Views/Likes)\n   • For Followers, choose quality\n   • Enter link\n   • Enter quantity\n\n3️⃣ *Buy Numbers*\n   • Choose WhatsApp or Telegram\n   • Select country\n   • Confirm order\n\n4️⃣ *Add Balance*\n   • Choose amount\n   • Pay to UPI ID\n   • Send proof\n\n5️⃣ *Referral*\n   • Share your link\n   • Get ₹${REFERRAL_BONUS} per referral\n\n📞 *Support:* ${SUPPORT_CONTACT}`;
+        
+        const keyboard = { inline_keyboard: [[{ text: "🔙 BACK", callback_data: "menu_main" }]] };
+        safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // ===== SEARCH =====
+    if (data === "menu_search") {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "📞 NUMBER", callback_data: "search_number" },
+                 { text: "📧 EMAIL", callback_data: "search_email" }],
+                [{ text: "🔙 BACK", callback_data: "menu_main" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "🔍 *Search Data*\n\nSend number with country code (e.g., +919876543210) or email address.\nCost: 1 balance.", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "search_number" || data === "search_email") {
+        if (!hasBalance(userId, 1)) {
+            Bot.answerCallbackQuery(query.id, "❌ Need 1 balance. Recharge first.", { show_alert: true });
+            return;
+        }
+        
+        sessions[userId] = { action: "search", type: data === "search_number" ? "number" : "email" };
+        const prompt = data === "search_number" ? "📞 Send phone number with country code:" : "📧 Send email address:";
+        safeEditMessageText(chatId, messageId, prompt, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // ===== INSTAGRAM =====
+    if (data === "menu_instagram") {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "👥 FOLLOWERS", callback_data: "ig_followers" }],
+                [{ text: "👁️ VIEWS", callback_data: "ig_views" }],
+                [{ text: "❤️ LIKES", callback_data: "ig_likes" }],
+                [{ text: "🔙 BACK", callback_data: "menu_main" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "📱 *Instagram Services*\n\nChoose a category:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "ig_followers") {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "💸 CHEAP (₹35/1k)", callback_data: "ig_followers_cheap" }],
+                [{ text: "🟡 MEDIUM (₹60/1k)", callback_data: "ig_followers_medium" }],
+                [{ text: "🔵 HIGH (₹90/1k)", callback_data: "ig_followers_high" }],
+                [{ text: "💎 PREMIUM (₹120/1k)", callback_data: "ig_followers_premium" }],
+                [{ text: "🔙 BACK", callback_data: "menu_instagram" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "👥 *Followers Quality*\n\nChoose quality level:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data.startsWith("ig_followers_")) {
+        const quality = data.split("_")[2];
+        sessions[userId] = { action: "instagram", service: "followers", quality: quality, step: "link" };
+        const keyboard = { inline_keyboard: [[{ text: "🔙 BACK", callback_data: "ig_followers" }]] };
+        safeEditMessageText(chatId, messageId, "👥 *Instagram Followers*\n\nSend your Instagram username or post link:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "ig_views") {
+        sessions[userId] = { action: "instagram", service: "views", step: "link" };
+        const keyboard = { inline_keyboard: [[{ text: "🔙 BACK", callback_data: "menu_instagram" }]] };
+        safeEditMessageText(chatId, messageId, "👁️ *Instagram Views*\n\nSend your Instagram video/reel link:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "ig_likes") {
+        sessions[userId] = { action: "instagram", service: "likes", step: "link" };
+        const keyboard = { inline_keyboard: [[{ text: "🔙 BACK", callback_data: "menu_instagram" }]] };
+        safeEditMessageText(chatId, messageId, "❤️ *Instagram Likes*\n\nSend your Instagram post link:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // ===== NUMBERS =====
+    if (data === "menu_numbers") {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "💬 WHATSAPP", callback_data: "num_whatsapp" }],
+                [{ text: "✈️ TELEGRAM", callback_data: "num_telegram" }],
+                [{ text: "🔙 BACK", callback_data: "menu_main" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "📞 *Buy Virtual Number*\n\nChoose platform:", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "num_whatsapp") {
+        sessions[userId] = { action: "number", platform: "WhatsApp", numbers: WHATSAPP_NUMBERS };
+        showNumberCountries(userId, chatId, messageId, "WhatsApp", WHATSAPP_NUMBERS);
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "num_telegram") {
+        sessions[userId] = { action: "number", platform: "Telegram", numbers: TELEGRAM_NUMBERS };
+        showNumberCountries(userId, chatId, messageId, "Telegram", TELEGRAM_NUMBERS);
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data.startsWith("num_select_")) {
+        const idx = parseInt(data.split("_")[2]);
+        if (isNaN(idx)) {
+            Bot.answerCallbackQuery(query.id, "Invalid selection", { show_alert: true });
+            return;
+        }
+        
+        const session = sessions[userId];
+        if (!session || !session.numbers || idx >= session.numbers.length) {
+            Bot.answerCallbackQuery(query.id, "❌ Session expired. Please start over.", { show_alert: true });
+            return;
+        }
+        
+        const selected = session.numbers[idx];
+        const finalPrice = getNumberFinalPrice(selected.base);
+        session.selected = selected;
+        session.finalPrice = finalPrice;
+        
+        const text = `📞 *Order Summary*\n\nPlatform: ${session.platform}\nCountry: ${selected.country} ${selected.flag}\nCode: ${selected.code}\nPrice: ₹${finalPrice}\nYour Balance: ₹${getBalance(userId)}\n\nConfirm?`;
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "✅ CONFIRM", callback_data: "num_confirm" },
+                 { text: "❌ CANCEL", callback_data: "menu_numbers" }],
+                [{ text: "🔙 BACK", callback_data: "num_whatsapp" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "num_confirm") {
+        const session = sessions[userId];
+        if (!session || !session.selected) {
+            Bot.answerCallbackQuery(query.id, "❌ Session expired. Please start over.", { show_alert: true });
+            return;
+        }
+        
+        const selected = session.selected;
+        const finalPrice = session.finalPrice;
+        
+        if (!hasBalance(userId, finalPrice)) {
+            Bot.answerCallbackQuery(query.id, `❌ Need ₹${finalPrice} balance. Recharge first.`, { show_alert: true });
+            return;
+        }
+        
+        deductBalance(userId, finalPrice);
+        const orderId = `NUM${Math.floor(Math.random() * 90000 + 10000)}`;
+        saveOrder(userId, 'number', session.platform, null, 1, finalPrice, orderId, selected.code, selected.country);
+        
+        delete sessions[userId];
+        
+        const text = `✅ *Order Placed!*\n\nOrder ID: \`${orderId}\`\nStatus: Pending\nYou will receive the number shortly.`;
+        const keyboard = { inline_keyboard: [[{ text: "🏠 MAIN MENU", callback_data: "menu_main" }]] };
+        safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // ===== PAYMENT =====
+    if (data === "menu_payment") {
+        const keyboard = { inline_keyboard: [] };
+        PAYMENT_TIERS.forEach(tier => {
+            keyboard.inline_keyboard.push([{ text: `₹${tier.request} → ₹${tier.add}`, callback_data: `pay_${tier.request}` }]);
+        });
+        keyboard.inline_keyboard.push([{ text: "🔙 BACK", callback_data: "menu_main" }]);
+        
+        safeEditMessageText(chatId, messageId, "💳 *Add Balance*\n\nChoose amount to recharge.\n\nAfter payment, send screenshot/transaction ID.\nYour balance will be added after admin approval.", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data.startsWith("pay_")) {
+        const requested = parseInt(data.split("_")[1]);
+        const tier = PAYMENT_TIERS.find(t => t.request == requested);
+        if (!tier) {
+            Bot.answerCallbackQuery(query.id, "Invalid amount", { show_alert: true });
+            return;
+        }
+        
+        const qrId = getConfig('qr_code_file_id');
+        const text = `💳 *Recharge ₹${tier.request} → ₹${tier.add}*\n\n1. Pay to following UPI ID: \`dhvanitsinhsolanki@fam\`\n2. After payment, send screenshot/transaction ID with amount.\n\n*Example:* \`${tier.request} TXN123456\`\n\nYour balance will be updated after verification.`;
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "📤 SEND PROOF", callback_data: `proof_${tier.request}` }],
+                [{ text: "🔙 BACK", callback_data: "menu_payment" }]
+            ]
+        };
+        
+        if (qrId) {
+            Bot.deleteMessage(chatId, messageId);
+            Bot.sendPhoto(chatId, qrId, { caption: text, parse_mode: "Markdown", reply_markup: keyboard });
+        } else {
+            safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        }
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data.startsWith("proof_")) {
+        const requested = parseInt(data.split("_")[1]);
+        sessions[userId] = { action: "payment_proof", amount: requested };
+        
+        const msg = safeSendMessage(chatId, `📤 Send your payment screenshot or transaction ID.\nFormat: \`${requested} TRANSACTION_ID\`\nExample: \`${requested} 1234567890\``, { parse_mode: "Markdown" });
+        // We'll handle the response in message handler
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // ===== ADMIN PANEL =====
+    if (data === "menu_admin") {
+        if (!isAdmin(userId)) {
+            Bot.answerCallbackQuery(query.id, "⛔ Access denied", { show_alert: true });
+            return;
+        }
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "📋 USERS", callback_data: "admin_users" },
+                 { text: "➕ ADD BALANCE", callback_data: "admin_add_balance" }],
+                [{ text: "➖ REMOVE BALANCE", callback_data: "admin_remove_balance" },
+                 { text: "🔨 BLOCK", callback_data: "admin_block" }],
+                [{ text: "🔓 UNBLOCK", callback_data: "admin_unblock" },
+                 { text: "👑 GRANT ADMIN", callback_data: "admin_grant" }],
+                [{ text: "👤 REVOKE ADMIN", callback_data: "admin_revoke" },
+                 { text: "📦 ORDERS", callback_data: "admin_orders" }],
+                [{ text: "🔧 SEARCH CONFIG", callback_data: "admin_search_config" },
+                 { text: "💰 PRICE CONFIG", callback_data: "admin_price_config" }],
+                [{ text: "📊 STATS", callback_data: "admin_stats" },
+                 { text: "🔙 BACK", callback_data: "menu_main" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "⚙️ *Admin Panel*", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "admin_users") {
+        if (!isAdmin(userId)) return;
+        const users = getRecentUsers(50);
+        const totalUsers = getTotalUsers();
+        let text = `📋 *Users (Total: ${totalUsers})*\n\n`;
+        users.forEach((u, i) => {
+            const uname = u.username ? `@${u.username}` : "No username";
+            const status = u.is_blocked ? "🔴" : "🟢";
+            const role = u.user_id == OWNER_ID ? "👑" : (u.is_admin ? "🛡️" : "👤");
+            text += `${i+1}. ${role} \`${u.user_id}\` | ${uname} | 💰${u.balance} | ${status}\n`;
+        });
+        safeSendMessage(chatId, text, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "admin_orders") {
+        if (!isAdmin(userId)) return;
+        const orders = getRecentOrders(20);
+        if (!orders.length) {
+            safeSendMessage(chatId, "No orders found.");
+            Bot.answerCallbackQuery(query.id);
+            return;
+        }
+        let text = "📦 *Recent Orders*\n\n";
+        orders.forEach((o, i) => {
+            text += `${i+1}. ID: ${o.order_id} | User: ${o.user_id}\n   Type: ${o.service_type} | Status: ${o.status}\n   Amount: ₹${o.final_price}\n\n`;
+        });
+        safeSendMessage(chatId, text, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "admin_stats") {
+        if (!isAdmin(userId)) return;
+        
+        const totalUsers = getTotalUsers();
+        const completedOrders = db.get("SELECT COUNT(*) as count, SUM(final_price) as total FROM orders WHERE status = 'completed'");
+        const totalOrders = completedOrders.count || 0;
+        const totalRevenue = completedOrders.total || 0;
+        
+        const today = new Date().toISOString().split('T')[0];
+        const todayOrders = db.get("SELECT COUNT(*) as count, SUM(final_price) as total FROM orders WHERE date(created_at) = ? AND status = 'completed'", [today]);
+        const todayCount = todayOrders.count || 0;
+        const todayRevenue = todayOrders.total || 0;
+        
+        const pendingPayments = db.get("SELECT COUNT(*) as count, SUM(requested_amount) as total FROM payments WHERE status = 'pending'");
+        const pendingCount = pendingPayments.count || 0;
+        const pendingAmount = pendingPayments.total || 0;
+        
+        const text = `📊 *FLOREXIA Analytics*\n\n👥 Total Users: ${totalUsers}\n📦 Completed Orders: ${totalOrders}\n💰 Total Revenue: ₹${totalRevenue}\n\n📅 Today's Orders: ${todayCount}\n💵 Today's Revenue: ₹${todayRevenue}\n\n⏳ Pending Payments: ${pendingCount}\n💳 Pending Amount: ₹${pendingAmount}`;
+        
+        safeSendMessage(chatId, text, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "admin_search_config") {
+        if (!isAdmin(userId)) return;
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "🔧 SET SEARCH URL", callback_data: "set_search_url" }],
+                [{ text: "🔑 SET SEARCH TOKEN", callback_data: "set_search_token" }],
+                [{ text: "📄 SHOW CONFIG", callback_data: "show_search_config" }],
+                [{ text: "🔙 BACK", callback_data: "menu_admin" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, "🔍 *Search API Configuration*", { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "admin_price_config") {
+        if (!isAdmin(userId)) return;
+        const current = `*Current Prices:*\n\n📞 Numbers Markup: ₹${getConfig('numbers_markup')}\n👥 Followers Cheap: ₹${getConfig('followers_cheap')}/1k\n👥 Followers Medium: ₹${getConfig('followers_medium')}/1k\n👥 Followers High: ₹${getConfig('followers_high')}/1k\n👥 Followers Premium: ₹${getConfig('followers_premium')}/1k\n👁️ Views: ₹${getConfig('views_price')}/10k\n❤️ Likes: ₹${getConfig('likes_price')}/100`;
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "📞 NUMBERS MARKUP", callback_data: "set_numbers_markup" }],
+                [{ text: "👥 CHEAP", callback_data: "set_followers_cheap" },
+                 { text: "👥 MEDIUM", callback_data: "set_followers_medium" }],
+                [{ text: "👥 HIGH", callback_data: "set_followers_high" },
+                 { text: "👥 PREMIUM", callback_data: "set_followers_premium" }],
+                [{ text: "👁️ VIEWS", callback_data: "set_views_price" },
+                 { text: "❤️ LIKES", callback_data: "set_likes_price" }],
+                [{ text: "🔙 BACK", callback_data: "menu_admin" }]
+            ]
+        };
+        safeEditMessageText(chatId, messageId, `💰 *Price Configuration*\n\n${current}`, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    // Admin actions that require input
+    const adminInputActions = [
+        'admin_add_balance', 'admin_remove_balance', 'admin_block', 'admin_unblock',
+        'admin_grant', 'admin_revoke', 'set_numbers_markup', 'set_followers_cheap',
+        'set_followers_medium', 'set_followers_high', 'set_followers_premium',
+        'set_views_price', 'set_likes_price', 'set_search_url', 'set_search_token'
+    ];
+    
+    if (adminInputActions.includes(data)) {
+        if (!isAdmin(userId)) {
+            Bot.answerCallbackQuery(query.id, "⛔ Access denied", { show_alert: true });
+            return;
+        }
+        
+        let prompt = "";
+        switch (data) {
+            case 'admin_add_balance': prompt = "✏️ Send user_id and amount (space separated):"; break;
+            case 'admin_remove_balance': prompt = "✏️ Send user_id and amount (space separated):"; break;
+            case 'admin_block': prompt = "✏️ Send user_id to block:"; break;
+            case 'admin_unblock': prompt = "✏️ Send user_id to unblock:"; break;
+            case 'admin_grant': 
+                if (userId != OWNER_ID) { Bot.answerCallbackQuery(query.id, "Only owner", { show_alert: true }); return; }
+                prompt = "✏️ Send user_id to grant admin:"; break;
+            case 'admin_revoke':
+                if (userId != OWNER_ID) { Bot.answerCallbackQuery(query.id, "Only owner", { show_alert: true }); return; }
+                prompt = "✏️ Send user_id to revoke admin:"; break;
+            case 'set_numbers_markup': prompt = "✏️ Send new numbers markup (extra ₹ per number):"; break;
+            case 'set_followers_cheap': prompt = "✏️ Send new followers cheap price per 1000:"; break;
+            case 'set_followers_medium': prompt = "✏️ Send new followers medium price per 1000:"; break;
+            case 'set_followers_high': prompt = "✏️ Send new followers high price per 1000:"; break;
+            case 'set_followers_premium': prompt = "✏️ Send new followers premium price per 1000:"; break;
+            case 'set_views_price': prompt = "✏️ Send new views price per 10,000:"; break;
+            case 'set_likes_price': prompt = "✏️ Send new likes price per 100:"; break;
+            case 'set_search_url': prompt = "✏️ Send Leakosint API URL:"; break;
+            case 'set_search_token': prompt = "✏️ Send Leakosint API token:"; break;
+        }
+        
+        sessions[userId] = { action: "admin_input", type: data };
+        safeEditMessageText(chatId, messageId, prompt, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    if (data === "show_search_config") {
+        if (!isAdmin(userId)) return;
+        const text = `*Search API Configuration*\n\nURL: ${getConfig('search_api_url')}\nToken: \`${(getConfig('search_api_token') || '').substring(0, 10)}...\`\nLanguage: ${getConfig('search_lang')}\nLimit: ${getConfig('search_limit')}`;
+        safeSendMessage(chatId, text, { parse_mode: "Markdown" });
+        Bot.answerCallbackQuery(query.id);
+        return;
+    }
+    
+    Bot.answerCallbackQuery(query.id);
+});
+
+function showNumberCountries(userId, chatId, messageId, platform, numbers) {
+    let text = `📞 *${platform} Numbers*\n\n`;
+    const keyboard = { inline_keyboard: [] };
+    
+    numbers.forEach((item, index) => {
+        const finalPrice = getNumberFinalPrice(item.base);
+        text += `${item.flag} *${item.country}* ${item.code} – ₹${finalPrice}\n`;
+        keyboard.inline_keyboard.push([{ text: `${item.flag} ${item.country} – ₹${finalPrice}`, callback_data: `num_select_${index}` }]);
+    });
+    keyboard.inline_keyboard.push([{ text: "🔙 BACK", callback_data: "menu_numbers" }]);
+    
+    safeEditMessageText(chatId, messageId, text, { parse_mode: "Markdown", reply_markup: keyboard });
+}
+
+// ========== MESSAGE HANDLER ==========
+Bot.on("message", (msg) => {
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    
+    if (!text) return;
+    if (text.startsWith("/")) return;
+    
+    if (!checkRateLimit(userId)) {
+        safeSendMessage(chatId, "⚠️ Too many requests. Please slow down.");
+        return;
+    }
+    
+    if (isBlocked(userId)) {
+        safeSendMessage(chatId, "⛔ You are blocked. Contact admin.");
+        return;
+    }
+    
+    // Handle sessions
+    const session = sessions[userId];
+    
+    if (session) {
+        if (session.action === "search") {
+            // Perform search
+            if (!hasBalance(userId, 1)) {
+                safeSendMessage(chatId, "❌ Not enough balance. Recharge first.");
+                delete sessions[userId];
+                return;
+            }
+            
+            safeSendMessage(chatId, "🔍 Searching... Please wait.");
+            
+            // Simulate async search
+            setTimeout(() => {
+                const result = searchLeakosint(text);
+                if (result.error) {
+                    safeSendMessage(chatId, `❌ ${result.error}`);
+                } else if (!result.List || Object.keys(result.List).length === 0) {
+                    safeSendMessage(chatId, "❌ No data found.");
+                } else {
+                    deductBalance(userId, 1);
+                    for (const [dbName, dbData] of Object.entries(result.List)) {
+                        const displayName = dbName.toLowerCase() === "1win" ? "FLOREXIA" : dbName;
+                        safeSendMessage(chatId, `📁 *Database:* \`${displayName}\``, { parse_mode: "Markdown" });
+                        dbData.Data.forEach(entry => {
+                            let formatted = formatSearchResult(entry);
+                            if (formatted.length > 4000) formatted = formatted.substring(0, 4000) + "\n... (truncated)";
+                            safeSendMessage(chatId, `\`\`\`js\n${formatted}\n\`\`\``, { parse_mode: "Markdown" });
+                        });
+                    }
+                    safeSendMessage(chatId, "🔴 *Powered by FLOREXIA*", { parse_mode: "Markdown" });
+                    notifyOwner(`🔍 *Search*\nUser: ${userId}\nQuery: \`${escapeMarkdown(text)}\``);
+                }
+            }, 100);
+            
+            delete sessions[userId];
+        }
+        else if (session.action === "instagram") {
+            if (session.step === "link") {
+                sessions[userId].link = text;
+                sessions[userId].step = "quantity";
+                
+                const minQty = session.service === 'followers' ? 100 : (session.service === 'views' ? 10000 : 100);
+                safeSendMessage(chatId, `Send quantity (minimum ${minQty}):`);
+            }
+            else if (session.step === "quantity") {
+                const qty = parseInt(text);
+                if (isNaN(qty) || qty <= 0) {
+                    safeSendMessage(chatId, "❌ Invalid quantity. Please enter a number.");
+                    return;
+                }
+                
+                const minQty = session.service === 'followers' ? 100 : (session.service === 'views' ? 10000 : 100);
+                if (qty < minQty) {
+                    safeSendMessage(chatId, `❌ Minimum quantity is ${minQty}.`);
+                    return;
+                }
+                
+                const total = getInstagramPrice(session.service, session.quality, qty);
+                
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: "✅ CONFIRM", callback_data: `ig_confirm_${qty}_${total}` },
+                         { text: "❌ CANCEL", callback_data: "menu_instagram" }]
+                    ]
+                };
+                
+                const serviceNames = { followers: 'Followers', views: 'Views', likes: 'Likes' };
+                const qualityText = session.quality ? ` (${session.quality})` : '';
+                
+                safeSendMessage(chatId, 
+                    `📱 *Order Summary*\n\nService: ${serviceNames[session.service]}${qualityText}\nLink: ${session.link}\nQuantity: ${qty}\nPrice: ₹${total}\nBalance: ₹${getBalance(userId)}\n\nConfirm?`,
+                    { parse_mode: "Markdown", reply_markup: keyboard }
+                );
+                
+                sessions[userId].quantity = qty;
+                sessions[userId].total = total;
+                // We'll handle confirmation via callback
+            }
+        }
+        else if (session.action === "payment_proof") {
+            // Process payment proof
+            const parts = text.split(' ');
+            if (parts.length < 2) {
+                safeSendMessage(chatId, "❌ Invalid format. Use: AMOUNT TRANSACTION_ID");
+                return;
+            }
+            
+            const amount = parseInt(parts[0]);
+            const txnId = parts[1];
+            
+            if (amount != session.amount) {
+                safeSendMessage(chatId, `❌ Amount mismatch. Please send exactly ${session.amount} as first number.`);
+                return;
+            }
+            
+            const result = db.run(
+                "INSERT INTO payments (user_id, amount, requested_amount, transaction_id, status) VALUES (?, ?, ?, ?, 'pending')",
+                [userId, amount, session.amount, txnId]
+            );
+            const paymentId = result.lastInsertRowid;
+            
+            const adminMsg = `💰 *New Payment Request*\n\nPayment ID: \`${paymentId}\`\nUser: ${userId}\nRequested: ₹${session.amount} → Add: ₹${PAYMENT_TIERS.find(t => t.request == session.amount).add}\nTxn ID: \`${txnId}\`\n\nUse /approve ${paymentId} to add balance`;
+            safeSendMessage(OWNER_ID, adminMsg, { parse_mode: "Markdown" });
+            
+            safeSendMessage(chatId, "✅ Payment request sent to admin. You'll be notified when approved.");
+            delete sessions[userId];
+        }
+        else if (session.action === "admin_input") {
+            // Handle admin inputs
+            if (!isAdmin(userId)) {
+                delete sessions[userId];
+                return;
+            }
+            
+            try {
+                switch (session.type) {
+                    case 'admin_add_balance': {
+                        const parts = text.split(' ');
+                        if (parts.length < 2) throw new Error("Invalid format");
+                        const uid = parseInt(parts[0]);
+                        const amount = parseInt(parts[1]);
+                        updateBalance(uid, amount);
+                        safeSendMessage(chatId, `✅ Added ₹${amount} to user ${uid}`);
+                        break;
+                    }
+                    case 'admin_remove_balance': {
+                        const parts = text.split(' ');
+                        if (parts.length < 2) throw new Error("Invalid format");
+                        const uid = parseInt(parts[0]);
+                        const amount = parseInt(parts[1]);
+                        updateBalance(uid, -amount);
+                        safeSendMessage(chatId, `✅ Removed ₹${amount} from user ${uid}`);
+                        break;
+                    }
+                    case 'admin_block': {
+                        const uid = parseInt(text);
+                        setBlock(uid, true);
+                        safeSendMessage(chatId, `✅ User ${uid} blocked`);
+                        break;
+                    }
+                    case 'admin_unblock': {
+                        const uid = parseInt(text);
+                        setBlock(uid, false);
+                        safeSendMessage(chatId, `✅ User ${uid} unblocked`);
+                        break;
+                    }
+                    case 'admin_grant': {
+                        const uid = parseInt(text);
+                        setAdmin(uid, true);
+                        safeSendMessage(chatId, `✅ User ${uid} is now admin`);
+                        break;
+                    }
+                    case 'admin_revoke': {
+                        const uid = parseInt(text);
+                        setAdmin(uid, false);
+                        safeSendMessage(chatId, `✅ Admin revoked from user ${uid}`);
+                        break;
+                    }
+                    case 'set_numbers_markup': {
+                        const val = parseInt(text);
+                        setConfig('numbers_markup', val);
+                        safeSendMessage(chatId, `✅ Numbers markup updated to ₹${val}`);
+                        break;
+                    }
+                    case 'set_followers_cheap': {
+                        const val = parseInt(text);
+                        setConfig('followers_cheap', val);
+                        safeSendMessage(chatId, `✅ Followers cheap price updated to ₹${val}/1k`);
+                        break;
+                    }
+                    case 'set_followers_medium': {
+                        const val = parseInt(text);
+                        setConfig('followers_medium', val);
+                        safeSendMessage(chatId, `✅ Followers medium price updated to ₹${val}/1k`);
+                        break;
+                    }
+                    case 'set_followers_high': {
+                        const val = parseInt(text);
+                        setConfig('followers_high', val);
+                        safeSendMessage(chatId, `✅ Followers high price updated to ₹${val}/1k`);
+                        break;
+                    }
+                    case 'set_followers_premium': {
+                        const val = parseInt(text);
+                        setConfig('followers_premium', val);
+                        safeSendMessage(chatId, `✅ Followers premium price updated to ₹${val}/1k`);
+                        break;
+                    }
+                    case 'set_views_price': {
+                        const val = parseInt(text);
+                        setConfig('views_price', val);
+                        safeSendMessage(chatId, `✅ Views price updated to ₹${val}/10k`);
+                        break;
+                    }
+                    case 'set_likes_price': {
+                        const val = parseInt(text);
+                        setConfig('likes_price', val);
+                        safeSendMessage(chatId, `✅ Likes price updated to ₹${val}/100`);
+                        break;
+                    }
+                    case 'set_search_url': {
+                        setConfig('search_api_url', text);
+                        safeSendMessage(chatId, `✅ Search API URL updated`);
+                        break;
+                    }
+                    case 'set_search_token': {
+                        setConfig('search_api_token', text);
+                        safeSendMessage(chatId, `✅ Search API token updated`);
+                        break;
+                    }
+                }
+            } catch (e) {
+                safeSendMessage(chatId, `❌ Error: ${e.message}`);
+            }
+            delete sessions[userId];
+        }
+    }
+});
+
+// ========== INLINE MODE (for sharing referral) ==========
+Bot.on("inline_query", (query) => {
+    const userId = query.from.id;
+    const user = db.get("SELECT referral_code FROM users WHERE user_id = ?", [userId]);
+    if (!user) return;
+    
+    const botInfo = Bot.getMe();
+    const botUsername = botInfo.username;
+    const refLink = `https://t.me/${botUsername}?start=${user.referral_code}`;
+    
+    const results = [{
+        type: "article",
+        id: "1",
+        title: "Share FLOREXIA Bot",
+        description: "Invite friends and earn ₹1 each!",
+        input_message_content: {
+            message_text: `🚀 Join FLOREXIA and earn rewards!\n\n🔗 ${refLink}`
+        }
+    }];
+    
+    Bot.answerInlineQuery(query.id, results);
+});
+
+// ========== ADMIN COMMANDS ==========
+Bot.onText("/approve (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (userId != OWNER_ID) return;
+    
+    const paymentId = parseInt(match[1]);
+    const payment = db.get("SELECT * FROM payments WHERE payment_id = ? AND status = 'pending'", [paymentId]);
+    if (!payment) {
+        Bot.replyTo(msg, "❌ Payment not found or already processed.");
+        return;
+    }
+    
+    const tier = PAYMENT_TIERS.find(t => t.request == payment.requested_amount);
+    if (!tier) {
+        Bot.replyTo(msg, "❌ Invalid payment amount.");
+        return;
+    }
+    
+    db.run("UPDATE payments SET status = 'approved', approved_by = ?, approved_at = ? WHERE payment_id = ?", [OWNER_ID, new Date().toISOString(), paymentId]);
+    updateBalance(payment.user_id, tier.add);
+    
+    safeSendMessage(payment.user_id, `✅ *Payment Approved!*\n\n₹${tier.add} added to your balance.`, { parse_mode: "Markdown" });
+    Bot.replyTo(msg, `✅ Payment approved. ₹${tier.add} added to user ${payment.user_id}.`);
+});
+
+Bot.onText("/reject (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (userId != OWNER_ID) return;
+    
+    const paymentId = parseInt(match[1]);
+    db.run("UPDATE payments SET status = 'rejected' WHERE payment_id = ?", [paymentId]);
+    Bot.replyTo(msg, `✅ Payment ${paymentId} rejected.`);
+});
+
+Bot.onText("/setqr", (msg) => {
+    const userId = msg.from.id;
+    if (userId != OWNER_ID) return;
+    
+    if (!msg.reply_to_message || !msg.reply_to_message.photo) {
+        Bot.replyTo(msg, "❌ Please reply to a photo with /setqr");
+        return;
+    }
+    
+    const fileId = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1].file_id;
+    setConfig('qr_code_file_id', fileId);
+    Bot.replyTo(msg, "✅ QR code updated successfully!");
+});
+
+Bot.onText("/msg (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (!isAdmin(userId)) return;
+    
+    const parts = msg.text.split(' ').slice(1);
+    if (parts.length < 2) {
+        Bot.replyTo(msg, "Usage: /msg user_id message");
+        return;
+    }
+    
+    const targetId = parseInt(parts[0]);
+    const messageText = parts.slice(1).join(' ');
+    
+    safeSendMessage(targetId, `📨 *Message from Admin:*\n\n${escapeMarkdown(messageText)}`, { parse_mode: "Markdown" });
+    Bot.replyTo(msg, `✅ Message sent to user ${targetId}`);
+    notifyOwner(`📤 Admin sent message to ${targetId}`);
+});
+
+Bot.onText("/complete (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (!isAdmin(userId)) return;
+    
+    const parts = msg.text.split(' ');
+    if (parts.length < 2) {
+        Bot.replyTo(msg, "Usage: /complete order_id [number]");
+        return;
+    }
+    
+    const orderId = parseInt(parts[1]);
+    const number = parts.length > 2 ? parts[2] : null;
+    
+    const order = getOrder(orderId);
+    if (!order) {
+        Bot.replyTo(msg, `❌ Order ${orderId} not found.`);
+        return;
+    }
+    
+    completeOrder(orderId, userId, number);
+    const updatedOrder = getOrder(orderId);
+    const adminName = msg.from.first_name || `Admin ${userId}`;
+    const receipt = generateReceipt(updatedOrder, adminName);
+    
+    safeSendMessage(order.user_id, receipt, { parse_mode: "Markdown" });
+    Bot.replyTo(msg, `✅ Order ${orderId} marked as completed. Receipt sent to user.`);
+    notifyOwner(`✅ Order ${orderId} completed by admin ${userId}`);
+});
+
+Bot.onText("/broadcast (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (userId != OWNER_ID) return;
+    
+    const text = match[1];
+    const users = db.all("SELECT user_id FROM users WHERE is_blocked = 0");
+    let sent = 0, failed = 0;
+    
+    users.forEach(u => {
+        try {
+            safeSendMessage(u.user_id, `📢 *Broadcast*\n\n${escapeMarkdown(text)}`, { parse_mode: "Markdown" });
+            sent++;
+        } catch {
+            failed++;
+        }
+    });
+    
+    Bot.replyTo(msg, `✅ Broadcast sent to ${sent} users. Failed: ${failed}`);
+    notifyOwner(`📢 Broadcast sent to ${sent} users.`);
+});
+
+Bot.onText("/stats", (msg) => {
+    const userId = msg.from.id;
+    if (!isAdmin(userId)) return;
+    
+    const totalUsers = getTotalUsers();
+    const completedOrders = db.get("SELECT COUNT(*) as count, SUM(final_price) as total FROM orders WHERE status = 'completed'");
+    const totalOrders = completedOrders.count || 0;
+    const totalRevenue = completedOrders.total || 0;
+    
+    const today = new Date().toISOString().split('T')[0];
+    const todayOrders = db.get("SELECT COUNT(*) as count, SUM(final_price) as total FROM orders WHERE date(created_at) = ? AND status = 'completed'", [today]);
+    const todayCount = todayOrders.count || 0;
+    const todayRevenue = todayOrders.total || 0;
+    
+    const pendingPayments = db.get("SELECT COUNT(*) as count, SUM(requested_amount) as total FROM payments WHERE status = 'pending'");
+    const pendingCount = pendingPayments.count || 0;
+    const pendingAmount = pendingPayments.total || 0;
+    
+    const text = `📊 *FLOREXIA Analytics*\n\n👥 Total Users: ${totalUsers}\n📦 Completed Orders: ${totalOrders}\n💰 Total Revenue: ₹${totalRevenue}\n\n📅 Today's Orders: ${todayCount}\n💵 Today's Revenue: ₹${todayRevenue}\n\n⏳ Pending Payments: ${pendingCount}\n💳 Pending Amount: ₹${pendingAmount}`;
+    
+    Bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+});
+
+Bot.onText("/users", (msg) => {
+    const userId = msg.from.id;
+    if (!isAdmin(userId)) return;
+    
+    const users = getRecentUsers(50);
+    let text = "👥 *All Users (last 50)*\n\n";
+    users.forEach(u => {
+        const role = u.is_admin ? (u.user_id == OWNER_ID ? "👑" : "🛡️") : "👤";
+        text += `${role} \`${u.user_id}\` | @${u.username || 'none'} | 💰${u.balance}\n`;
+    });
+    Bot.sendMessage(msg.chat.id, text, { parse_mode: "Markdown" });
+});
+
+Bot.onText("/user_orders (.+)", (msg, match) => {
+    const userId = msg.from.id;
+    if (!isAdmin(userId)) return;
+    
+    const targetId = parseInt(match[1]);
+    const orders = db.all("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 20", [targetId]);
+    
+    if (!orders.length) {
+        Bot.replyTo(msg, `No orders for user ${targetId}`);
+        return;
+    }
+    
+    let text = `📦 *Orders for user ${targetId}*\n\n`;
+    orders.forEach(o => {
+        text += `ID: ${o.order_id} | ${o.service_type} | ₹${o.final_price} | ${o.status}\n`;
+    });
+    Bot.sendMessage(msg.chat.id, text, { parse_mode: "Markdown" });
+});
+
+// Handle Instagram confirmation callback
+Bot.on("callback_query", (query) => {
+    const data = query.data;
+    if (data.startsWith("ig_confirm_")) {
+        const parts = data.split("_");
+        if (parts.length < 4) return;
+        
+        const qty = parseInt(parts[2]);
+        const total = parseInt(parts[3]);
+        const userId = query.from.id;
+        const session = sessions[userId];
+        
+        if (!session || session.action !== "instagram") {
+            Bot.answerCallbackQuery(query.id, "❌ Session expired.", { show_alert: true });
+            return;
+        }
+        
+        if (!hasBalance(userId, total)) {
+            Bot.answerCallbackQuery(query.id, `❌ Need ₹${total} balance.`, { show_alert: true });
+            return;
+        }
+        
+        deductBalance(userId, total);
+        const orderId = `IG${Math.floor(Math.random() * 90000 + 10000)}`;
+        const serviceDisplay = session.quality ? `${session.service}_${session.quality}` : session.service;
+        saveOrder(userId, 'instagram', serviceDisplay, session.link, qty, total, orderId);
+        
+        delete sessions[userId];
+        
+        const text = `✅ *Order Placed!*\n\nOrder ID: \`${orderId}\`\nStatus: Pending`;
+        const keyboard = { inline_keyboard: [[{ text: "🏠 MAIN MENU", callback_data: "menu_main" }]] };
+        safeEditMessageText(query.message.chat.id, query.message.message_id, text, { parse_mode: "Markdown", reply_markup: keyboard });
+        Bot.answerCallbackQuery(query.id);
+    }
+});
+
+Logger.info("🚀 FLOREXIA Bot started successfully!");
